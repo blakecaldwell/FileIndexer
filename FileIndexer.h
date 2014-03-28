@@ -41,6 +41,7 @@ struct CmdLineOptions { // Pass command line options around as a struct
 /* Method protoypes */
 int is_pathValid(const fs::path & root_search_path);
 void get_CmdLineOptions(int argc, char * argv[], CmdLineOptions && myOptions);
-void searchPath(const CmdLineOptions & myOptions, BoundedQueue<std::string> && fileQueue, boost::exception_ptr & error);
+void searchPath(const CmdLineOptions & myOptions, boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boost::exception_ptr & error);
+void cleanupWorkers (std::vector<boost::scoped_ptr<boost::thread>> &&workers,  std::vector<boost::exception_ptr> &&index_errors);
 
 #endif

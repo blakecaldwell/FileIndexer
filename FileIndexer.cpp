@@ -115,7 +115,7 @@ void get_CmdLineOptions(int argc, char * argv[], CmdLineOptions && myOptions)
   }  
 }
 
-void searchPath(const CmdLineOptions &myOptions, BoundedQueue<std::string> &&fileQueue, boost::exception_ptr & error)
+void searchPath(const CmdLineOptions &myOptions, boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boost::exception_ptr & error)
 {
   /* DANGERS
      1. What about loops from links
@@ -129,40 +129,38 @@ void searchPath(const CmdLineOptions &myOptions, BoundedQueue<std::string> &&fil
   
   // the thread we are placing work on their queue
 
+  fs::path p,sym_path,abs_path,cur_canonical;
   try {
-    for ( fs::recursive_directory_iterator end, dir(myOptions.root_search_path); 
-	  dir != end; ++dir ) {
-      // dir contains one entry. it could be a file, path
-      
-      fs::file_status s = fs::status(dir->path());
-      if (fs::is_symlink(dir->path())) {
-	if (myOptions.debug > 2)
-	  std::cout << "Found symlink: " << dir->path().string() << std::endl;
-	//		  << "to: " << fs::read_symlink(dir->path()).string() << std::endl;
-	//fs::path parent = fs::read_symlink(dir->path());
-	fs::path parent = dir->path();
-	while (!parent.empty()) {
-	  if (parent == myOptions.root_search_path) {
-	    // skip because target is rooted in root_search_path
-	    if (myOptions.debug > 2)
-	      std::cout << "Skipping symlink: " << dir->path().string() << std::endl;
-	    ++dir;
-	    break;
-	  }
-	  parent = parent.parent_path();
-	}
-      }
-      if ((fs::is_regular_file(s)) && (dir->path().extension() == ".txt")) {
+    // convert to absolute path
+    abs_path = fs::canonical(myOptions.root_search_path);
+    for ( fs::recursive_directory_iterator end, it(abs_path); 
+	  it != end; ++it ) {
+      p = it->path();
+      if ((fs::is_regular_file(p)) && (p.extension() == ".txt")) {
 	if (myOptions.debug > 1)
-	  std::cout << "searchWorker: " << dir->path().string() << " placed on queue\n";
-	std::string _temp = dir->path().string();
-	fileQueue.send(boost::move(_temp));
+	  std::cout << "searchWorker: " << p.string() << " placed on queue\n";
+	std::string _temp = p.string();
+	//fileQueue->send(std::move(_temp));
+      }
+      else if (fs::is_symlink(p)) {
+	if (myOptions.debug > 2) {
+	  std::cout << "Found symlink: " << p.string() << std::endl;
+	}
+	sym_path = fs::read_symlink(p); // this was introduced with boost 1.44
+	cur_canonical = fs::canonical(sym_path);
+	if (abs_path < cur_canonical.remove_filename()) { //modifies cur_canonical
+	  // the symlink points to within the search path, so skip
+	  if (myOptions.debug > 2)
+	    std::cout << "Skipping " << p.string()
+		      << " because it is a symlink to the path: " << cur_canonical.string() << std::endl;
+	  it.no_push();
+	}
       }
     }
     
     // finished with indexing root path now
     // place character of death on queue
-    fileQueue.send(boost::move(""));
+    fileQueue->send(std::move(""));
   }
   catch (...) {
     error = boost::current_exception();
@@ -172,49 +170,72 @@ void searchPath(const CmdLineOptions &myOptions, BoundedQueue<std::string> &&fil
     std::cout << "Finished search of path: " << myOptions.root_search_path << std::endl;
 }
 
+void cleanupWorkers (std::vector<boost::scoped_ptr<boost::thread>> &&workers,  std::vector<boost::exception_ptr> &&index_errors)
+{
+  std::for_each(workers.begin(), workers.end(), [](boost::scoped_ptr<boost::thread> t) {t->join();});
+  std::for_each(index_errors.begin(), index_errors.end(), [](boost::exception_ptr & e) {boost::rethrow_exception(e);});
+}
+
+
 int main(int argc, char * argv[])
 {
-  try { // main try block
-    CmdLineOptions user_options;
+  std::vector<boost::scoped_ptr<boost::thread>> workers;
+  std::vector<boost::exception_ptr> index_errors;
+  CmdLineOptions user_options;
+  boost::shared_ptr<BoundedQueue<std::string>> FilesToIndex( new BoundedQueue<std::string>(MAX_QUEUE_FILES) );
 
-    get_CmdLineOptions(argc,argv,user_options);
-
-    BoundedQueue<std::string> FilesToIndex(MAX_QUEUE_FILES);
-    /* Launch search thread */
-    boost::exception_ptr search_error;
-    boost::thread searchWorker(searchPath, user_options, boost::ref(FilesToIndex), boost::ref(search_error));
-    //if( search_error )
-    //  boost::rethrow_exception(search_error);
+  try { /* get exceptions from threads launched or FileIndexer_exception */
     
-    // instantiate workers
-    std::vector<FileWorker> workers;
-    for (int i = 0; i < user_options.N; ++i) {
-      workers.push_back(FileWorker(i));
-    }
+    get_CmdLineOptions(argc,argv,std::move(user_options));
 
     /* Launch worker threads */
-    std::vector<boost::thread> threads;
-    std::vector<boost::exception_ptr> index_errors;
     for (int i = 0; i < user_options.N; ++i) {
-      index_errors.push_back(boost::exception_ptr());
-      threads.push_back(boost::thread(&FileWorker::run, workers[i], boost::ref(FilesToIndex), boost::ref(index_errors[i])));
+      boost::exception_ptr index_error;
+      boost::thread* t_ptr;
+      try {
+	FileWorker _w(i);
+	boost::scoped_ptr<boost::thread> t( new boost::thread(&FileWorker::run, &_w, FilesToIndex, boost::ref(index_error)));
+	workers.push_back(t);
+	index_errors.push_back(index_error);
+      }
+      catch (boost::thread_resource_error const& e) {
+	std::cout << "Couldn't launch as many threads as requested: " << e.what() << std::endl;
+	std::cout << "Continuing with " << i << " threads\n";  // i starts at 0 and threads[i] is not running
+	break;
+      }
+      catch (std::exception const& e) {
+	std::cout << "Thread " << i << " thew exception: " << e.what() << std::endl;
+	
+	// need to tear down because we dont know what caused this
+	cleanupWorkers(boost::ref(workers),boost::ref(index_errors));
+	return EXIT_ERROR;
+      }	
     }
-    //if( index_error )
-    //  boost::rethrow_exception(index_error);
     
+    /* Launch search thread */
+    boost::exception_ptr search_error;
+    boost::thread searchWorker(searchPath, user_options, FilesToIndex, boost::ref(search_error));
+    if( search_error )
+      boost::rethrow_exception(search_error);
+    
+    /* Wait for workers to drain FilesToIndex */
     searchWorker.join();
-    for (int i = 0; i < user_options.N; ++i) {
-      threads[i].join();
-    }
-
     if (user_options.debug > 1)
       std::cout << "workers have all joined" << std::endl;
-  }
+    
+    /* print the resulting main index */
+    
+    /* all done */
+    cleanupWorkers(boost::move(workers),boost::move(index_errors));
+    
+  } /* --- main try block --- */
+  
   catch(std::exception const& e) {
     std::cout << std::endl
 	      << e.what() << std::endl;
+    cleanupWorkers(boost::move(workers),boost::move(index_errors));
     return EXIT_ERROR;
-  }
+  } /* --- main catch block -- */ 
 
   return EXIT_SUCCESS;
-}  
+} /* --- int main() --- */

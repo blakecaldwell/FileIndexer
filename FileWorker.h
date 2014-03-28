@@ -10,8 +10,6 @@
 #include <iostream>
 #include <deque>
 
-
-
 #define READ_PAGE_SIZE 4096
 // This was chosen to align with a large disk I/O operation and to fill an entire page in the buffer cache
 // Anything larger is likely will bring more overhead in terms of additional IOs, buffer cache management.
@@ -66,18 +64,29 @@ class BoundedQueue
   }
 };
 
-class FileWorker
+class FileWorker : boost::noncopyable
 {
   int _workerId;
+  enum state { STARTED, WAITING, WORKING, SHUTDOWN };
+  state _state;
   std::map<std::string,int> Index;
 
   void index_token(const char * token);
   void read_page(std::ifstream &fh, char *page);
   int index_page(const char *page, int page_size, char ** prepend_ptr);
   void process_file(const std::string fh);  
+
 public:
   FileWorker(int Id) { _workerId = Id; }   /* FileWorker class constructor */
-  void run(BoundedQueue<std::string> &fileQueue, boost::exception_ptr & error);
+  ~FileWorker() {
+    if ( _state == WAITING ) {
+      std::cout << "Thread: " << _workerId << " was destroyed while in the blocking state!\n";
+    }
+    else {
+      std::cout << "~FileWorker(): Thread: " << _workerId << std::endl;
+    }
+  } 
+  void run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boost::exception_ptr & error);
 };
 
 #endif

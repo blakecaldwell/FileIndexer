@@ -181,21 +181,21 @@ void FileWorker::process_file(const std::string myFile)
   fh.close();
 }
 
-void FileWorker::run(BoundedQueue<std::string> &fileQueue, boost::exception_ptr & error)
+void FileWorker::run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boost::exception_ptr & error) 
 {
   std::string file_to_process;
-  
   try {
-    std::cout << "Worker (" << _workerId << ") running" << std::endl;
     do {
+      _state = WAITING;
       file_to_process = fileQueue.receive();
+      _state = WORKING;
       //process_file(file_to_process);
     } while (file_to_process != "");
-    std::cout << "Worker (" << _workerId << ") found that search had terminated\n";
+    _state = SHUTDOWN;
     // put the character of death back on the queue to signal the rest of the workers.
     // not ideal, but in time spent passing around the termination character is less
     // than alternatively checking if string in "" on every receive()
-    fileQueue.send("");
+    fileQueue.send(std::move(""));
   }
   catch (...) {
     error = boost::current_exception();

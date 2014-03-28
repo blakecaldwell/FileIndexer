@@ -136,10 +136,16 @@ void searchPath(const CmdLineOptions &myOptions, boost::shared_ptr<BoundedQueue<
     for ( fs::recursive_directory_iterator end, it(abs_path); 
 	  it != end; ++it ) {
       p = it->path();
-      if ((fs::is_regular_file(p)) && (p.extension() == ".txt")) {
-	if (myOptions.debug > 1)
-	  std::cout << "searchWorker: " << p.string() << " placed on queue\n";
-	fileQueue->send(p.string());
+      if (fs::is_regular_file(p)) {
+	if (p.extension().string() == ".txt") {
+	  if (myOptions.debug > 1) {
+	    std::cout << "searchWorker: " << p.string() << " placed on queue\n";
+	  }
+	  // we want to place a copy of the string on the queue, but the queue is written in a way to 
+	  // accept rvalue arguments
+	  std::string _file = p.string();
+	  fileQueue->send(std::move(_file));
+	}
       }
       else if (fs::is_symlink(p)) {
 	if (myOptions.debug > 2) {
@@ -152,11 +158,11 @@ void searchPath(const CmdLineOptions &myOptions, boost::shared_ptr<BoundedQueue<
 	  if (myOptions.debug > 2)
 	    std::cout << "Skipping " << p.string()
 		      << " because it is a symlink to the path: " << cur_canonical.string() << std::endl;
-	  it.no_push();
+	  it.no_push_pending();
 	}
       }
     }
-    
+
     // finished with indexing root path now
     // place character of death on queue
     fileQueue->send("");
@@ -169,16 +175,19 @@ void searchPath(const CmdLineOptions &myOptions, boost::shared_ptr<BoundedQueue<
     std::cout << "Finished search of path: " << myOptions.root_search_path << std::endl;
 }
 
-void cleanupWorkers (std::vector<boost::scoped_ptr<boost::thread>> &&workers,  std::vector<boost::exception_ptr> &&index_errors)
+void cleanupWorkers (std::vector<boost::thread*> &&workers,  std::vector<boost::exception_ptr> &&index_errors)
 {
-  std::for_each(workers.begin(), workers.end(), [](boost::scoped_ptr<boost::thread> t) {t->join();});
-  std::for_each(index_errors.begin(), index_errors.end(), [](boost::exception_ptr & e) {boost::rethrow_exception(e);});
+  std::for_each(workers.begin(), workers.end(), [](boost::thread* t) {t->join();});
+  std::for_each(index_errors.begin(), index_errors.end(), [](boost::exception_ptr &e) {
+      if (e)
+	boost::rethrow_exception(e);
+    });
 }
 
 
 int main(int argc, char * argv[])
 {
-  std::vector<boost::scoped_ptr<boost::thread>> workers;
+  std::vector<boost::thread*> workers;
   std::vector<boost::exception_ptr> index_errors;
   CmdLineOptions user_options;
   boost::shared_ptr<BoundedQueue<std::string>> FilesToIndex( new BoundedQueue<std::string>(MAX_QUEUE_FILES) );
@@ -187,52 +196,55 @@ int main(int argc, char * argv[])
     
     get_CmdLineOptions(argc,argv,std::move(user_options));
 
+    /* Launch search thread */
+    boost::exception_ptr search_error;
+    boost::thread searchWorker(searchPath, user_options, FilesToIndex, boost::ref(search_error));
+    if( search_error )
+      boost::rethrow_exception(search_error);
+
     /* Launch worker threads */
-    for (int i = 0; i < user_options.N; ++i) {
+    bool stop=false;
+    for (int i = 0; (i < user_options.N) && (stop == false); ++i) {
       boost::exception_ptr index_error;
-      boost::thread* t_ptr;
       try {
-	FileWorker _w(i);
-	boost::scoped_ptr<boost::thread> t( new boost::thread(&FileWorker::run, &_w, FilesToIndex, boost::ref(index_error)));
+	FileWorker _w(i, user_options.debug);
+	boost::thread* t( new boost::thread(&FileWorker::run, &_w, FilesToIndex, boost::ref(index_error)));
 	workers.push_back(t);
 	index_errors.push_back(index_error);
       }
       catch (boost::thread_resource_error const& e) {
 	std::cout << "Couldn't launch as many threads as requested: " << e.what() << std::endl;
 	std::cout << "Continuing with " << i << " threads\n";  // i starts at 0 and threads[i] is not running
-	break;
+	stop = true;
       }
       catch (std::exception const& e) {
 	std::cout << "Thread " << i << " thew exception: " << e.what() << std::endl;
 	
 	// need to tear down because we dont know what caused this
-	cleanupWorkers(boost::ref(workers),boost::ref(index_errors));
+	cleanupWorkers(std::move(workers),std::move(index_errors));
 	return EXIT_ERROR;
       }	
     }
-    
-    /* Launch search thread */
-    boost::exception_ptr search_error;
-    boost::thread searchWorker(searchPath, user_options, FilesToIndex, boost::ref(search_error));
-    if( search_error )
-      boost::rethrow_exception(search_error);
-    
+        
     /* Wait for workers to drain FilesToIndex */
     searchWorker.join();
     if (user_options.debug > 1)
-      std::cout << "workers have all joined" << std::endl;
+      std::cout << "search worker has joined" << std::endl;
+    cleanupWorkers(std::move(workers),std::move(index_errors));
+    if (user_options.debug > 1)
+      std::cout << "index workers have all joined" << std::endl;
     
     /* print the resulting main index */
     
     /* all done */
-    cleanupWorkers(boost::move(workers),boost::move(index_errors));
+
     
   } /* --- main try block --- */
   
   catch(std::exception const& e) {
     std::cout << std::endl
 	      << e.what() << std::endl;
-    cleanupWorkers(boost::move(workers),boost::move(index_errors));
+    cleanupWorkers(std::move(workers),std::move(index_errors));
     return EXIT_ERROR;
   } /* --- main catch block -- */ 
 

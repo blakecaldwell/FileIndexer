@@ -45,7 +45,9 @@ class BoundedQueue
   {
     {
       boost::unique_lock<boost::mutex> lg(_mutex); // enter crit section
+      
       _cv_not_full.wait(lg, boost::bind(&BoundedQueue::isNotFull, this));  // block if full
+
       _queue.push_front(std::move(msg));
       ++_size;
     }  // leave crit section
@@ -54,12 +56,12 @@ class BoundedQueue
   T receive()
   {
     boost::unique_lock<boost::mutex> lg(_mutex);
-
     _cv_not_empty.wait(lg, boost::bind(&BoundedQueue::isNotEmpty, this));  // block if empty
     T msg = std::move(_queue.back());
     _queue.pop_back();
     --_size;
     _cv_not_full.notify_one();
+    
     return msg;
   }
 };
@@ -67,6 +69,7 @@ class BoundedQueue
 class FileWorker : boost::noncopyable
 {
   int _workerId;
+  int _debug;
   enum state { STARTED, WAITING, WORKING, SHUTDOWN };
   state _state;
   std::map<std::string,int> Index;
@@ -77,13 +80,21 @@ class FileWorker : boost::noncopyable
   void process_file(const std::string fh);  
 
 public:
-  FileWorker(int Id) { _workerId = Id; }   /* FileWorker class constructor */
+  FileWorker(int Id, int debug=0) { 
+    _workerId = Id; 
+    _debug = debug;
+    if (_debug > 2) {
+      std::cout << "FileWorker(): " << _workerId << std::endl;
+    }
+  }
   ~FileWorker() {
     if ( _state == WAITING ) {
       std::cout << "Thread: " << _workerId << " was destroyed while in the blocking state!\n";
     }
     else {
-      std::cout << "~FileWorker(): Thread: " << _workerId << std::endl;
+      if (_debug > 2) {
+	std::cout << "~FileWorker(): " << _workerId << std::endl;
+      }
     }
   } 
   void run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boost::exception_ptr & error);

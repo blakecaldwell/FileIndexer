@@ -189,6 +189,8 @@ void FileWorker::run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boo
       _state = WAITING;
       file_to_process = fileQueue->receive();
       _state = WORKING;
+      if (_debug > 2)
+	std::cout << "worker has file: " << file_to_process << std::endl;
       //process_file(file_to_process);
     } while (file_to_process != "");
     _state = SHUTDOWN;

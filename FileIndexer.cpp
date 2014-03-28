@@ -139,8 +139,7 @@ void searchPath(const CmdLineOptions &myOptions, boost::shared_ptr<BoundedQueue<
       if ((fs::is_regular_file(p)) && (p.extension() == ".txt")) {
 	if (myOptions.debug > 1)
 	  std::cout << "searchWorker: " << p.string() << " placed on queue\n";
-	std::string _temp = p.string();
-	//fileQueue->send(std::move(_temp));
+	fileQueue->send(p.string());
       }
       else if (fs::is_symlink(p)) {
 	if (myOptions.debug > 2) {
@@ -160,7 +159,7 @@ void searchPath(const CmdLineOptions &myOptions, boost::shared_ptr<BoundedQueue<
     
     // finished with indexing root path now
     // place character of death on queue
-    fileQueue->send(std::move(""));
+    fileQueue->send("");
   }
   catch (...) {
     error = boost::current_exception();

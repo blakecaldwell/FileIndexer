@@ -187,7 +187,7 @@ void FileWorker::run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boo
   try {
     do {
       _state = WAITING;
-      file_to_process = fileQueue.receive();
+      file_to_process = fileQueue->receive();
       _state = WORKING;
       //process_file(file_to_process);
     } while (file_to_process != "");
@@ -195,7 +195,7 @@ void FileWorker::run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boo
     // put the character of death back on the queue to signal the rest of the workers.
     // not ideal, but in time spent passing around the termination character is less
     // than alternatively checking if string in "" on every receive()
-    fileQueue.send(std::move(""));
+    fileQueue->send("");
   }
   catch (...) {
     error = boost::current_exception();

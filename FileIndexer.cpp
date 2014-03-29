@@ -209,11 +209,9 @@ void searchPath(const CmdLineOptions &myOptions, boost::shared_ptr<BoundedQueue<
   }
   catch (const boost::exception& e) {
     std::cout << "searchWorker encountered unexpected exception" << diagnostic_information(e) << std::endl;
-    /* Passing exception out of thread */
     error = boost::current_exception();
   }
   catch (...) {
-    /* Passing exception out of thread */
     error = boost::current_exception();
   }
 
@@ -250,7 +248,6 @@ int main(int argc, char * argv[])
     bool exception_thrown = false;
     int i;
     for (i = 0; ((i < user_options.N) && !exception_thrown); ++i) {
-      std::cout << "starting "<< i << std::endl;
       boost::exception_ptr index_error;
       FileWorker _w(i, user_options.debug);
       try {

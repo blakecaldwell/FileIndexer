@@ -17,7 +17,7 @@
 #define DEFAULT_NUM_WORKERS 3
 // Impose limit on queue growth. This will also limit how far ahead a single worker thread can get.
 // The searchPath thread will block until the queue drops back below this threshold
-#define MAX_QUEUE_FILES 3
+#define MAX_QUEUE_FILES 1000
 #define EXIT_ERROR 2
 
 namespace po = boost::program_options;

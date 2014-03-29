@@ -5,6 +5,7 @@
 #include <boost/regex.hpp>
 #include <boost/algorithm/string/constants.hpp>
 #include <boost/thread/condition_variable.hpp>
+#include <boost/smart_ptr/shared_array.hpp>
 #include <fstream>
 #include <cstring>
 #include <iostream>
@@ -73,16 +74,24 @@ class FileWorker : boost::noncopyable
   enum state { STARTED, WAITING, WORKING, SHUTDOWN };
   state _state;
   std::map<std::string,int> Index;
+  char _page[READ_PAGE_SIZE];
+  int _page_size;
+  boost::shared_ptr<char[]> prepend;
+  boost::shared_ptr<char[]> initial;
 
   void index_token(const char * token);
-  void read_page(std::ifstream &fh, char *page);
-  int index_page(const char *page, int page_size, char ** prepend_ptr);
-  void process_file(const std::string fh);  
+  void read_page(std::ifstream &fh, int n_bytes);
+  int index_page();
+  void process_file(const std::string &&fh);  
 
 public:
   FileWorker(int Id, int debug=0) { 
     _workerId = Id; 
     _debug = debug;
+    initial.reset(new char[1]);
+    initial[0] = '\0';
+    prepend.reset(new char[2]);
+    prepend[0] = '\0';
   }
   void run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boost::exception_ptr & error);
 };

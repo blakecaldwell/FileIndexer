@@ -9,6 +9,7 @@
 #include <cstring>
 #include <iostream>
 #include <deque>
+#include "WordIndex.h"
 
 #define READ_PAGE_SIZE 4096
 // This was chosen to align with a large disk I/O operation and to fill an entire page in the buffer cache
@@ -73,18 +74,24 @@ class FileWorker : boost::noncopyable
   enum state { STARTED, WAITING, WORKING, SHUTDOWN };
   state _state;
   std::map<std::string,int> Index;
-
+  char ** prepend;
   void index_token(const char * token);
-  void read_page(std::ifstream &fh, char *page);
-  int index_page(const char *page, int page_size, char ** prepend_ptr);
+  void read_page(std::ifstream &fh, int n_bytes);
+  int index_page();
   void process_file(const std::string fh);  
+  char _page[READ_PAGE_SIZE];
+  int _page_size;
 
 public:
   FileWorker(int Id, int debug=0) { 
     _workerId = Id; 
     _debug = debug;
+    prepend = new char*[1];
+    *prepend[0] = '\0';
   }
   void run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boost::exception_ptr & error);
+  void run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boost::shared_ptr<WordIndex> memory_table, boost::exception_ptr & error);
+
 };
 
 #endif

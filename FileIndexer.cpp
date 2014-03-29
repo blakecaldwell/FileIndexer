@@ -209,11 +209,13 @@ void searchPath(const CmdLineOptions &myOptions, boost::shared_ptr<BoundedQueue<
   }
   catch (const boost::exception& e) {
     std::cout << "searchWorker encountered unexpected exception" << diagnostic_information(e) << std::endl;
-    /* Passing exception out of thread */
+    error = boost::current_exception();
+  }
+  catch(std::exception const& e) {
+    std::cout << e.what() << std::endl;
     error = boost::current_exception();
   }
   catch (...) {
-    /* Passing exception out of thread */
     error = boost::current_exception();
   }
 
@@ -237,6 +239,7 @@ int main(int argc, char * argv[])
   std::vector<boost::exception_ptr> index_errors;
   CmdLineOptions user_options;
   boost::shared_ptr<BoundedQueue<std::string>> FilesToIndex( new BoundedQueue<std::string>(MAX_QUEUE_FILES) );
+  boost::shared_ptr<WordIndex> memory_table;
 
   try { /* get exceptions from threads launched or FileIndexer_exception */
     
@@ -254,7 +257,7 @@ int main(int argc, char * argv[])
       boost::exception_ptr index_error;
       FileWorker _w(i, user_options.debug);
       try {
-	worker_group.create_thread(boost::bind(&FileWorker::run, &_w, FilesToIndex, boost::ref(index_error)));
+	worker_group.create_thread(boost::bind(&FileWorker::run, &_w, FilesToIndex, memory_table, boost::ref(index_error)));
       }
       catch (boost::thread_resource_error const& e) {
 	exception_thrown = true;

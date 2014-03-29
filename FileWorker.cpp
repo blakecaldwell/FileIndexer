@@ -9,180 +9,225 @@ void FileWorker::index_token(const char * token) {
     Index[token] = 1;
 }
 
-void FileWorker::read_page(std::ifstream &fh, char *page)
+void FileWorker::read_page(std::ifstream &fh, int n_bytes)
 {
-  std::cout << "+ read_page()\n";
-  fh.read(page, READ_PAGE_SIZE);
-  // That could fail (eof), so we make sure to add the null terminator at the end of the 
-  // sucessfully read bytes
-  page[fh.gcount()] = '\0';
-  std::cout << "- read_page()\n";
+  if (_debug > 2)
+    std::cout << "+ read_page()\n";
+  fh.read(_page, n_bytes);
+  // That could fail (eof), so return number of bytes and let caller handle adding null terminator
+  if (_debug > 2)
+    std::cout << "- read_page()\n";
+  _page_size = fh.gcount();
 }
 
-int FileWorker::index_page(const char *page, int page_size, char ** prepend_ptr)
+int FileWorker::index_page()
 {
-  std::cout << "+ index_page()\n";
+  if (_debug > 2)
+    std::cout << "+ index_page()\n";
   boost::cregex_token_iterator it,old_it,j;
   boost::regex non_delimiters("[A-Za-z0-9]+");
 
   char * initial;
   std::string temp = "";
+  int prepend_bytes = strlen(*prepend);
+  if ((prepend_bytes > 0) && (_debug > 2)) {
+    std::cout << "prepend is: " << *prepend << std::endl;
+  }
+  int initial_len = prepend_bytes;
   std::vector<const char *> to_index;
-  int initial_len = 0;
   boost::cmatch match; // for finding delimiter match at begining or end
   bool is_first_char_nondelim;
 
-  assert(prepend_ptr != NULL);
-  //char * prepend = *prepend_ptr;
-  
-  if (page != NULL) {
-    it = boost::cregex_token_iterator(page, page+strlen(page),non_delimiters,boost::algorithm::token_compress_on);
+  if (_page != NULL) {
+    it = boost::cregex_token_iterator(_page, _page+_page_size,non_delimiters,boost::algorithm::token_compress_on);
   }
-  
   // If we were passed a string in prepend we have a special case for the
   // first token. Index that token and then proceed normally
-  if (*prepend_ptr != NULL) {
-    std::cout << "+ handle_prepend\n";
+  if (prepend_bytes > 0) {
+    if (_debug > 2)
+      std::cout << "+ handle_prepend\n";    
     // build initial token
-    initial_len = strlen(*prepend_ptr);
-    std::cout << "intial_len = " << initial_len;
+    if (_debug > 2)
+      std::cout << "intial_len = " << initial_len;
     if (it != j) {
       // is the first character not a delimter?
-      is_first_char_nondelim = boost::regex_match(page, match, non_delimiters);
+      is_first_char_nondelim = boost::regex_match(_page, match, non_delimiters);
       if (is_first_char_nondelim) {
 	// yes, so add first token to prepend string
-	// can't assign boost::sub_match to std::string, but can append
-	temp = std::string() + *it;
+	temp = std::string() + *it;   // workaround for converting boost::sub_match to std::string
 	initial_len += temp.length();
-	std::cout << " + " << temp.length() << std::endl;
+	if (_debug > 2)
+	  std::cout << " + " << temp.length() << std::endl;
       }
       else {
 	// no, but check if it can be added to the index anyway
 	temp = std::string() + *it;
-	std::cout << "adding first token \"" << temp << "\"\n";
+	if (_debug > 2)
+	  std::cout << "adding first token \"" << temp << "\"\n";
       }
       *it++;
     }    
     initial = new char[initial_len+1];
-    std::cout << "allocate initial at " << &initial << std::endl;
-    strncpy(initial,*prepend_ptr,strlen(*prepend_ptr));
-    initial[strlen(*prepend_ptr)] = '\0';
-    std::cout << "the initial buffer now has \"" << initial << "\"\n";
+    if (_debug > 2)
+      std::cout << "allocate initial at " << &initial << std::endl;
+    strncpy(initial,*prepend,strlen(*prepend));
+    initial[strlen(*prepend)] = '\0';
+    if (_debug > 2)
+      std::cout << "Copied prepend to initial buffer.\n";
     
     if (is_first_char_nondelim) {
       // check that the first token should be added to prepend
-      strcpy(&initial[strlen(*prepend_ptr)],temp.c_str());
+      if (_debug > 2)
+	std::cout << "Copied temp with first token to initial buffer.\n";
+      strcpy(&initial[prepend_bytes],temp.c_str());
+      temp.clear();
     }
 
-    // free prepend 
-    delete[] *prepend_ptr;
-    std::cout << "free prepend at" << &*prepend_ptr << std::endl;
-    *prepend_ptr = NULL;
-    
     to_index.push_back(initial);
-    std::cout << "adding initial \"" << initial << "\"\n";
-    std::cout << "- handle_prepend\n";
+    if (_debug > 2) {
+      std::cout << "adding initial \"" << initial << "\"\n";
+      std::cout << "- handle_prepend\n";
+    }
     delete [] initial;
-    std::cout << "free initial at" << &initial << std::endl;
-
+    if (_debug > 2)
+      std::cout << "free initial at" << &initial << std::endl;
   }
-  
+
   while (true) {
     // push temp from previous loop
     if (temp.length() > 0) {
-      std::cout << "adding \"" << temp << "\"\n";
+      if (_debug > 2)
+	std::cout << "adding \"" << temp << "\"\n";
       to_index.push_back(temp.c_str());
     }
     //save the iterator location pointing to this token
-    old_it = it;
+    //    old_it = it;
     *it++;
     if (it == j) {
       // at this point we want to discard
       break;
     }
-    temp = std::string() + *old_it;
+    //    temp = std::string() + *old_it;
   }
-
+  
   int remaining = 0;
   // If we read a full page, the last token could have been truncated
-   if (page_size == READ_PAGE_SIZE) {
-    std::cout << "+ handle_remaining\n";
-    std::cout << "page[" << READ_PAGE_SIZE << "] = " << page[READ_PAGE_SIZE] << std::endl;
-    std::cout << "-----------------------------------------" << std::endl;
+  if (_page_size == READ_PAGE_SIZE) {
+    if (_debug > 2) {
+      std::cout << "+ handle_remaining\n";
+      std::cout << "-----------------------------------------" << std::endl;
+    }
     // Find the first delimiter. Any characters between that point and the end have been
     // truncated
     for(int i = READ_PAGE_SIZE - 1; i >= 0; i--) {
-      std::cout << "page[" << i << "] = " << page[i] << std::endl;
-      if (boost::regex_match(&page[i], match, non_delimiters)) {
+      if (_debug > 2)
+	std::cout << "page[" << i << "] = " << _page[i] << std::endl;
+      if (boost::regex_match(&_page[i], match, non_delimiters)) {
 	++remaining;
       }
       else
 	break;
     }
-    std::cout << "- handle_remaining\n";
+    if (_debug > 2)
+      std::cout << "- handle_remaining\n";
    }
-  
-   // If there are trailing characters, we are just going to leave them on temp
-   // They will be prepended to the next page
-  if (remaining) { 
-    std::cout << "there are " << remaining << " characters\n";
-  }
-  else {
-    // no trailing characters, so its safe to push temp (we won't
-    // neet to remove it later)
-    to_index.push_back(temp.c_str());
-  }
-  
-  // index each of the elements
-  auto index_func = boost::bind(&FileWorker::index_token, this, _1);
-  std::for_each(to_index.begin(), to_index.end(), index_func);
-  std::cout << "- index_page()\n";
-  return remaining;
+
+
+   if (!remaining) {
+     // no trailing characters, so its safe to push temp (we won't
+     // need to remove it later)
+     if (_debug > 2)
+       std::cout << "adding from temp: " << temp << std::endl;
+     to_index.push_back(temp.c_str());
+   }
+   else {
+     // If there are trailing characters, we are just going to leave them on temp
+     // They will be prepended to the next page
+     if (_debug > 2)
+       std::cout << "there are " << remaining << " characters\n";
+   }
+   
+   
+   // index each of the elements
+   //auto index_func = boost::bind(&FileWorker::index_token, this, _1);
+   //std::for_each(to_index.begin(), to_index.end(), index_func);
+   std::cout << "- index_page()\n";
+   return remaining;
 }
   
 void FileWorker::process_file(const std::string myFile)
 {
-  std::ifstream fh (myFile, std::ios::in|std::ios::binary);
+  std::ifstream fh (myFile, std::ios::in);
   if (!fh.is_open()) {
     std::cerr << "Could not openen file: " << myFile << std::endl;
     return;
   }
-  
-  std::cout << "+ loop_file()\n";
-  // I was very careful in index_page to handle a non-null terminated string in the 
-  // case that the entire 4k was used for the read. This allows us to memory and disk
-  // operators page aligned.
-  char page[READ_PAGE_SIZE] = "";
-  char *prepend = NULL;
+  if (_debug > 2)
+    std::cout << "+ loop_file()\n";
+  char * temp;  // unlike page this is null terminated
   int trailing = 0;
-  
+  int new_trailing_len = 0;
+
   while (!fh.eof()) {
-    trailing = 0;
+    // read up to READ_PAGE_SIZE bytes 
+    read_page(fh,READ_PAGE_SIZE);
     
-    read_page(fh,page);
-    // index the words in batche, but note the number of
-    // characters in a word that was truncated
-    trailing = index_page(page,fh.gcount(),&prepend);
-    
+    // index the words in batches, but note the number of
+    // characters in a word that were truncated
+    trailing = index_page();
+ 
     // allocate prepend buffer for trailing chars from last page?
     if (trailing) {
-      prepend = new char[trailing+1];  // free in index_page()
-      std::cout << "allocate prepend at " << &prepend << std::endl;
-      // use memcpy for efficiency since this may be a large block
-      memcpy(prepend,&page[READ_PAGE_SIZE-trailing],trailing);
-      prepend[trailing]='\0';
+      new_trailing_len = trailing;
+      if (trailing == READ_PAGE_SIZE)
+	new_trailing_len += strlen(*prepend);
+      
+      if ((prepend != NULL) && (strlen(*prepend) > 0)) {
+	if ((unsigned)new_trailing_len > strlen(*prepend)) {
+	  std::cout << "growing trailing buffer to " << new_trailing_len << " bytes. old trailing was " << strlen(*prepend) << std::endl;
+	  temp = new char[trailing+1];
+	  strncpy(temp,*prepend,strlen(*prepend));
+	  temp[trailing] = '\0';
+	  std::cout << "temp buffer: " << *temp << std::endl;
+	  delete [] prepend;
+	  *prepend = new char[new_trailing_len+1];
+	  memcpy(*prepend,temp,trailing);
+	  delete [] temp;
+	  memcpy(&(prepend)[strlen(*prepend)],&_page[READ_PAGE_SIZE-trailing],trailing);
+	  (*prepend)[new_trailing_len]='\0';
+	  std::cout << "new buffer: " << *prepend << std::endl;
+	}
+	else {
+	  std::cout << "copied into existing trailing buffer. now " << new_trailing_len << " bytes.\n";
+	  memcpy(*prepend,&_page[READ_PAGE_SIZE-trailing],trailing);
+	  (*prepend)[new_trailing_len]='\0';
+	}
+      }
+      else {
+	  std::cout << "created new trailing buffer of " << new_trailing_len << " bytes.\n";
+	  *prepend = new char[new_trailing_len+1];
+	  memcpy(*prepend,&_page[READ_PAGE_SIZE-trailing],trailing);
+	  (*prepend)[new_trailing_len]='\0';
+	  std::cout << "new buffer: " << *prepend << std::endl;
+      }
+    }
+    else {
+      if (prepend != NULL) {
+	// mark prepend as unused
+	(*prepend)[0] = '\0';
+      }
     }
   }
-
+  
   // We hit EOF, but check for trailing characters that need to be indexed
   if (trailing && (prepend != NULL)) {
-    index_page(NULL,0,&prepend);
+    index_page();
   }
   std::cout << "- loop_file()\n";
   fh.close();
 }
 
-void FileWorker::run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boost::exception_ptr & error)
+void FileWorker::run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boost::shared_ptr<WordIndex> memory_table, boost::exception_ptr & error)
 {
   std::string file_to_process;
   try {
@@ -200,8 +245,17 @@ void FileWorker::run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boo
     // not ideal, but in time spent passing around the termination character is less
     // than alternatively checking if string in "" on every receive()
     fileQueue->send("");
+  }  
+  catch (const boost::exception& e) {
+    std::cout << "FileWorker encountered unexpected exception" << diagnostic_information(e) << std::endl;
+    error = boost::current_exception();
+  }
+  catch(std::exception const& e) {
+    std::cout << e.what() << std::endl;
+    error = boost::current_exception();
   }
   catch (...) {
     error = boost::current_exception();
   }
 }
+

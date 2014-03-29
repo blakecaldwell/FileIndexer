@@ -44,8 +44,8 @@ int FileWorker::index_page()
   boost::regex non_delimiters("[A-Za-z0-9]+");
 
   int remaining = 0;
-  int prepend_bytes = strlen(prepend.get());
-  std::cout << "prepend is: " << prepend.get() << std::endl;
+  int prepend_bytes = strlen(*prepend);
+  std::cout << "prepend is: " << *prepend<< std::endl;
   std::string temp = "";
   std::vector<const char *> to_index;
   boost::cmatch match; // for finding delimiter match at begining or end
@@ -87,9 +87,7 @@ int FileWorker::index_page()
       }
       *it++;
     }
-    initial.reset( new char[initial_len+1] );
-    memcpy(initial.get(),prepend.get(),prepend_bytes);
-    initial[prepend_bytes] = '\0';
+    initial = *prepend;
     if (_debug > 2) {
       std::cout << "adding prepend to inital\n";
     }
@@ -97,14 +95,14 @@ int FileWorker::index_page()
     if (is_first_char_nondelim) {
       // check if the first token should be added to prepend
       // use strcpy because temp is null terminated
-      strcpy(&initial[prepend_bytes],temp.c_str());
+      initial += temp;
       // clear temp, so it's safe to reuse
       temp.clear();
     }
 
-    to_index.push_back(initial.get());
+    to_index.push_back(initial.c_str());
     if (_debug > 2) {
-      std::cout << "adding initial \"" << initial.get() << "\"\n";
+      std::cout << "adding initial \"" << *prepend << "\"\n";
       std::cout << "- handle_prepend\n";
     }
   }
@@ -201,12 +199,11 @@ void FileWorker::process_file(const std::string &&myFile)
     // characters in a word that were truncated
     trailing_bytes = index_page();
     
-    // allocate prepend buffer for trailing chars from last page?
-    prepend.reset( new char[trailing_bytes+1] );
-    prepend[trailing_bytes] = '\0';
     if (trailing_bytes > 0) {
+      boost::shared_ptr<char[]> prepend(new char [trailing_bytes+1]);
       // use memcpy for efficiency since this may be a large block
-      memcpy(prepend.get(),&_page[READ_PAGE_SIZE-trailing_bytes],trailing_bytes);
+      memcpy(prepend,&_page[READ_PAGE_SIZE-trailing_bytes],trailing_bytes);
+      prepend[trailing_bytes] = '\0';
     }
 
     // the current page is old data, reset page_size to 0

@@ -1,8 +1,8 @@
 CXX = g++
 CXXFLAGS = -std=c++0x -g -Wall 
-#INCLUDES := -I/usr/include -L/usr/lib
+INCLUDES := -I/home/blake/boost/include
 LD := g++
-LDFLAGS := -lboost_program_options-mt -lboost_thread-mt -lboost_system-mt -lboost_filesystem-mt -lboost_regex-mt
+LDFLAGS := -L/home/blake/boost/lib -W1,-rpath,/home/blake/boost/lib -lboost_program_options -lboost_thread -lboost_system -lboost_filesystem -lboost_regex
 SOURCES := $(shell find . -name '*.cpp' -print | sort)
 OBJECTS := $(SOURCES:.cpp=.o)
 TARGETS = FileIndexer FileWorker WordIndex

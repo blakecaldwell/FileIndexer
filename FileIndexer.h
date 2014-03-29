@@ -32,6 +32,8 @@ class base_exception: public std::exception
   }
 } FileIndexer_exception;
 
+struct recursive_directory_iterator_error: virtual boost::exception { };
+
 struct CmdLineOptions { // Pass command line options around as a struct
   int debug;
   int N;

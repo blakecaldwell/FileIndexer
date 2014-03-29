@@ -129,50 +129,95 @@ void searchPath(const CmdLineOptions &myOptions, boost::shared_ptr<BoundedQueue<
   
   // the thread we are placing work on their queue
 
-  fs::path p,sym_path,abs_path,cur_canonical;
+  fs::path p,sym_path,abs_path, temp_path;
+  fs::recursive_directory_iterator end, it(myOptions.root_search_path);
   try {
     // convert to absolute path
     abs_path = fs::canonical(myOptions.root_search_path);
-    for ( fs::recursive_directory_iterator end, it(abs_path); 
-	  it != end; ++it ) {
-      p = it->path();
-      if (fs::is_regular_file(p)) {
-	if (p.extension().string() == ".txt") {
-	  if (myOptions.debug > 1) {
-	    std::cout << "searchWorker: " << p.string() << " placed on queue\n";
+    for ( ; it != end; ++it ) {
+      try {
+	p = it->path();
+	std::cout << "Examining: " << p.string() << std::endl;
+
+	if (fs::is_regular_file(p)) {
+	  if (p.extension().string() == ".txt") {
+	    if (myOptions.debug > 1) {
+	      std::cout << "searchWorker: " << p.string() << " placed on queue\n";
+	    }
+	    // we want to place a copy of the string on the queue, but the queue is written in a way to 
+	    // accept rvalue arguments
+	    std::string _file = p.string();
+	    fileQueue->send(std::move(_file));
 	  }
-	  // we want to place a copy of the string on the queue, but the queue is written in a way to 
-	  // accept rvalue arguments
-	  std::string _file = p.string();
-	  fileQueue->send(std::move(_file));
+	}
+	else if (fs::is_symlink(p)) {
+	  temp_path = fs::canonical(p);
+	  if (fs::is_directory(temp_path)) {
+	    if (abs_path <= temp_path) {
+	      if (myOptions.debug > 2) {
+		std::cout << "Skipping " << p.string()
+			  << " because it is a symlink to the path: " << fs::canonical(p).string() << std::endl;
+	      }
+	      it.no_push_pending();
+	    }
+	    // continue recursing directory
+	  }
+	  else {
+	    std::cout << abs_path.string() << "==" << temp_path.string() << std::endl;
+	    if (abs_path <= temp_path.remove_filename()) { // modifies sym_path
+	      if (myOptions.debug > 2) {
+		std::cout << "Skipping " << p.string()
+			  << " because it is a symlink to the path: " << fs::canonical(p).string() << std::endl;
+	      }
+	      it.no_push_pending();
+	    }
+
+	    if (p.extension().string() == ".txt") {
+	      std::cout << "searchWorker: " << p.string() << " placed on queue\n";
+            }
+            // we want to place a copy of the string on the queue, but the queue is written in a way to
+            // accept rvalue arguments
+	    std::string _file = p.string();
+            fileQueue->send(std::move(_file));
+	  }
 	}
       }
-      else if (fs::is_symlink(p)) {
-	if (myOptions.debug > 2) {
-	  std::cout << "Found symlink: " << p.string() << std::endl;
+      catch(const boost::filesystem::filesystem_error& e) {
+	if(e.code() == boost::system::errc::permission_denied) {
+	  std::cerr << "Search permission is denied for:  " << p.string() << "\n";
 	}
-	sym_path = fs::read_symlink(p); // this was introduced with boost 1.44
-	cur_canonical = fs::canonical(sym_path);
-	if (abs_path < cur_canonical.remove_filename()) { //modifies cur_canonical
-	  // the symlink points to within the search path, so skip
-	  if (myOptions.debug > 2)
-	    std::cout << "Skipping " << p.string()
-		      << " because it is a symlink to the path: " << cur_canonical.string() << std::endl;
-	  it.no_push_pending();
+	else if(e.code() == boost::system::errc::no_such_file_or_directory) {
+	  std::cerr << "Symlink " << p.string() << " points to non-existent file\n";
 	}
+	else if(e.code() == boost::system::errc::too_many_symbolic_link_levels) {
+	  std::cerr << "Encountered too many symbolic link levels at: " << p.string() << " . Not continuing\n";
+	  // boost bug 5652 -- fixed in 1.49.0
+	}
+	else {
+	  /* Not sure how to hande other errors, so continue propogating */
+	  std::cerr << "Fatal error detected in directory search: " << e.what() << std::endl;
+	  // shut down threads
+	  fileQueue->send("");
+	  throw boost::enable_current_exception(recursive_directory_iterator_error()) <<
+	    boost::errinfo_errno(errno);
+	}
+	it.no_push_pending();
       }
     }
-
+    
     // finished with indexing root path now
-    // place character of death on queue
+    // place termination character on queue
     fileQueue->send("");
+    
+    // all errors were handled, so don't pass any outside this thread
+    error = boost::exception_ptr();
+    if (myOptions.debug > 1)
+      std::cout << "Finished search of path: " << myOptions.root_search_path << std::endl;
   }
   catch (...) {
+    /* Passing exception out of thread */
     error = boost::current_exception();
   }
-  
-  if (myOptions.debug > 1)
-    std::cout << "Finished search of path: " << myOptions.root_search_path << std::endl;
 }
 
 void cleanupWorkers (std::vector<boost::thread*> &&workers,  std::vector<boost::exception_ptr> &&index_errors)
@@ -199,8 +244,6 @@ int main(int argc, char * argv[])
     /* Launch search thread */
     boost::exception_ptr search_error;
     boost::thread searchWorker(searchPath, user_options, FilesToIndex, boost::ref(search_error));
-    if( search_error )
-      boost::rethrow_exception(search_error);
 
     /* Launch worker threads */
     bool stop=false;
@@ -228,6 +271,9 @@ int main(int argc, char * argv[])
         
     /* Wait for workers to drain FilesToIndex */
     searchWorker.join();
+    if( search_error )
+      boost::rethrow_exception(search_error);
+
     if (user_options.debug > 1)
       std::cout << "search worker has joined" << std::endl;
     cleanupWorkers(std::move(workers),std::move(index_errors));
@@ -240,7 +286,12 @@ int main(int argc, char * argv[])
 
     
   } /* --- main try block --- */
-  
+  catch(const recursive_directory_iterator_error &e) {
+    //    std::cout << std::endl
+    //        << e.what() << std::endl;
+    cleanupWorkers(std::move(workers),std::move(index_errors));
+    return EXIT_ERROR;
+  }
   catch(std::exception const& e) {
     std::cout << std::endl
 	      << e.what() << std::endl;

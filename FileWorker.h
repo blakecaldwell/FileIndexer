@@ -83,20 +83,7 @@ public:
   FileWorker(int Id, int debug=0) { 
     _workerId = Id; 
     _debug = debug;
-    if (_debug > 2) {
-      std::cout << "FileWorker(): " << _workerId << std::endl;
-    }
   }
-  ~FileWorker() {
-    if ( _state == WAITING ) {
-      std::cout << "Thread: " << _workerId << " was destroyed while in the blocking state!\n";
-    }
-    else {
-      if (_debug > 2) {
-	std::cout << "~FileWorker(): " << _workerId << std::endl;
-      }
-    }
-  } 
   void run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boost::exception_ptr & error);
 };
 

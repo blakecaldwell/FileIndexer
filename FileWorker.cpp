@@ -144,7 +144,8 @@ void FileWorker::process_file(const std::string myFile)
 {
   std::ifstream fh (myFile, std::ios::in|std::ios::binary);
   if (!fh.is_open()) {
-    std::cerr << "Trouble openening file: " << myFile << std::endl;
+    std::cerr << "Could not openen file: " << myFile << std::endl;
+    return;
   }
   
   std::cout << "+ loop_file()\n";
@@ -181,7 +182,7 @@ void FileWorker::process_file(const std::string myFile)
   fh.close();
 }
 
-void FileWorker::run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boost::exception_ptr & error) 
+void FileWorker::run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boost::exception_ptr & error)
 {
   std::string file_to_process;
   try {
@@ -191,7 +192,8 @@ void FileWorker::run(boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boo
       _state = WORKING;
       if (_debug > 2)
 	std::cout << "worker has file: " << file_to_process << std::endl;
-      //process_file(file_to_process);
+      if (file_to_process != "")
+	process_file(file_to_process);
     } while (file_to_process != "");
     _state = SHUTDOWN;
     // put the character of death back on the queue to signal the rest of the workers.

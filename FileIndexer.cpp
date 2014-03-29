@@ -221,9 +221,9 @@ void searchPath(const CmdLineOptions &myOptions, boost::shared_ptr<BoundedQueue<
     std::cout << "Finished search of path: " << myOptions.root_search_path << std::endl;
 }
 
-void cleanupWorkers (std::vector<boost::thread*> &&workers,  std::vector<boost::exception_ptr> &&index_errors)
+void cleanupWorkers (boost::thread_group &&workers,  std::vector<boost::exception_ptr> &&index_errors)
 {
-  std::for_each(workers.begin(), workers.end(), [](boost::thread* t) {t->join();});
+  workers.join_all();
   std::for_each(index_errors.begin(), index_errors.end(), [](boost::exception_ptr &e) {
       if (e)
 	boost::rethrow_exception(e);
@@ -233,7 +233,7 @@ void cleanupWorkers (std::vector<boost::thread*> &&workers,  std::vector<boost::
 
 int main(int argc, char * argv[])
 {
-  std::vector<boost::thread*> workers;
+  boost::thread_group worker_group;
   std::vector<boost::exception_ptr> index_errors;
   CmdLineOptions user_options;
   boost::shared_ptr<BoundedQueue<std::string>> FilesToIndex( new BoundedQueue<std::string>(MAX_QUEUE_FILES) );
@@ -247,29 +247,31 @@ int main(int argc, char * argv[])
     boost::thread searchWorker(searchPath, user_options, FilesToIndex, boost::ref(search_error));
 
     /* Launch worker threads */
-    bool stop=false;
-    for (int i = 0; (i < user_options.N) && (stop == false); ++i) {
+    bool exception_thrown = false;
+    int i;
+    for (i = 0; ((i < user_options.N) && !exception_thrown); ++i) {
+      std::cout << "starting "<< i << std::endl;
       boost::exception_ptr index_error;
+      FileWorker _w(i, user_options.debug);
       try {
-	FileWorker _w(i, user_options.debug);
-	boost::thread* t( new boost::thread(&FileWorker::run, &_w, FilesToIndex, boost::ref(index_error)));
-	workers.push_back(t);
-	index_errors.push_back(index_error);
+	worker_group.create_thread(boost::bind(&FileWorker::run, &_w, FilesToIndex, boost::ref(index_error)));
       }
       catch (boost::thread_resource_error const& e) {
+	exception_thrown = true;
 	std::cout << "Couldn't launch as many threads as requested: " << e.what() << std::endl;
-	std::cout << "Continuing with " << i << " threads\n";  // i starts at 0 and threads[i] is not running
-	stop = true;
+	std::cout << "Continuing with " << i << " threads\n";
+	// don't push index_error
+	continue;
       }
       catch (std::exception const& e) {
-	std::cout << "Thread " << i << " thew exception: " << e.what() << std::endl;
-	
+	std::cout << "Thread " << i << " thew exception: " << e.what() << std::endl;	  
 	// need to tear down because we dont know what caused this
-	cleanupWorkers(std::move(workers),std::move(index_errors));
+	cleanupWorkers(std::move(worker_group),std::move(index_errors));
 	return EXIT_ERROR;
-      }	
+      }
+      index_errors.push_back(index_error);
     }
-        
+    
     /* Wait for workers to drain FilesToIndex */
     searchWorker.join();
     if( search_error )
@@ -277,7 +279,7 @@ int main(int argc, char * argv[])
 
     if (user_options.debug > 1)
       std::cout << "search worker has joined" << std::endl;
-    cleanupWorkers(std::move(workers),std::move(index_errors));
+    cleanupWorkers(std::move(worker_group),std::move(index_errors));
     if (user_options.debug > 1)
       std::cout << "index workers have all joined" << std::endl;
     
@@ -290,13 +292,13 @@ int main(int argc, char * argv[])
   catch(const recursive_directory_iterator_error &e) {
     //    std::cout << std::endl
     //        << e.what() << std::endl;
-    cleanupWorkers(std::move(workers),std::move(index_errors));
+    cleanupWorkers(std::move(worker_group),std::move(index_errors));
     return EXIT_ERROR;
   }
   catch(std::exception const& e) {
     std::cout << std::endl
 	      << e.what() << std::endl;
-    cleanupWorkers(std::move(workers),std::move(index_errors));
+    cleanupWorkers(std::move(worker_group),std::move(index_errors));
     return EXIT_ERROR;
   } /* --- main catch block -- */ 
 

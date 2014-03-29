@@ -117,29 +117,45 @@ void get_CmdLineOptions(int argc, char * argv[], CmdLineOptions && myOptions)
 
 void searchPath(const CmdLineOptions &myOptions, boost::shared_ptr<BoundedQueue<std::string>> fileQueue, boost::exception_ptr & error)
 {
-  /* DANGERS
-     1. What about loops from links
-     2. How are hardlinks handled
-     3. Log when permissions denied is encountered and other exceptions
-  */
-
-  // There is a bug with finding symlinks. Use boost version with read_symlink
   if (myOptions.debug > 1)
     std::cout << "Started search of path: " << myOptions.root_search_path << std::endl;
   
-  // the thread we are placing work on their queue
-
   fs::path p,sym_path,abs_path, temp_path;
   fs::recursive_directory_iterator end, it(myOptions.root_search_path);
   try {
-    // convert to absolute path
+    // use absolute paths for comparisons
     abs_path = fs::canonical(myOptions.root_search_path);
-    for ( ; it != end; ++it ) {
+    do {     // Can't use for loop because we need a try block. See below
       try {
 	p = it->path();
-	std::cout << "Examining: " << p.string() << std::endl;
-
-	if (fs::is_regular_file(p)) {
+        if (fs::is_symlink(p)) {
+	  temp_path = fs::canonical(p);
+	  if (fs::is_directory(temp_path)) {
+	    if (abs_path <= temp_path) {
+	      if (myOptions.debug > 2) {
+		std::cout << "Skipping " << p.string()
+			  << " because it is a symlink to the path: " << temp_path.string() << std::endl;
+	      }
+	      // since its a directory, can skip file handling code below
+	      it.no_push();
+	    }
+	    // continue recursing directory
+	  }
+	  else { // this is a file
+	    if (p.extension().string() == ".txt") { // more efficient to filter on extension than lexigraphical compare
+	      if (abs_path <= temp_path.remove_filename()) { // modifies sym_path
+		if (myOptions.debug > 2) {
+		  std::cout << "Skipping " << p.string()
+			    << " because it is a symlink to the path: " << fs::canonical(p).string() << std::endl;
+		}
+		// skip this file
+		it.no_push();
+	      }
+	    }
+	    /* The symlink is to a regular file, so just fall through */
+	  }
+	}
+	else if (fs::is_regular_file(p)) {
 	  if (p.extension().string() == ".txt") {
 	    if (myOptions.debug > 1) {
 	      std::cout << "searchWorker: " << p.string() << " placed on queue\n";
@@ -150,36 +166,14 @@ void searchPath(const CmdLineOptions &myOptions, boost::shared_ptr<BoundedQueue<
 	    fileQueue->send(std::move(_file));
 	  }
 	}
-	else if (fs::is_symlink(p)) {
-	  temp_path = fs::canonical(p);
-	  if (fs::is_directory(temp_path)) {
-	    if (abs_path <= temp_path) {
-	      if (myOptions.debug > 2) {
-		std::cout << "Skipping " << p.string()
-			  << " because it is a symlink to the path: " << fs::canonical(p).string() << std::endl;
-	      }
-	      it.no_push_pending();
-	    }
-	    // continue recursing directory
+	try{  // boost bug 6821: recursive_directory_iterator: increment fails with 'access denied'
+	  ++it;
+	}
+	catch(const boost::filesystem::filesystem_error& e) {
+	  if(e.code() == boost::system::errc::permission_denied) {
+	    std::cerr << "Search permission is denied for:  " << p.string() << "\n";
 	  }
-	  else {
-	    std::cout << abs_path.string() << "==" << temp_path.string() << std::endl;
-	    if (abs_path <= temp_path.remove_filename()) { // modifies sym_path
-	      if (myOptions.debug > 2) {
-		std::cout << "Skipping " << p.string()
-			  << " because it is a symlink to the path: " << fs::canonical(p).string() << std::endl;
-	      }
-	      it.no_push_pending();
-	    }
-
-	    if (p.extension().string() == ".txt") {
-	      std::cout << "searchWorker: " << p.string() << " placed on queue\n";
-            }
-            // we want to place a copy of the string on the queue, but the queue is written in a way to
-            // accept rvalue arguments
-	    std::string _file = p.string();
-            fileQueue->send(std::move(_file));
-	  }
+	  it.no_push();
 	}
       }
       catch(const boost::filesystem::filesystem_error& e) {
@@ -201,23 +195,30 @@ void searchPath(const CmdLineOptions &myOptions, boost::shared_ptr<BoundedQueue<
 	  throw boost::enable_current_exception(recursive_directory_iterator_error()) <<
 	    boost::errinfo_errno(errno);
 	}
-	it.no_push_pending();
+	it.no_push();
+	++it;
       }
-    }
-    
+    } while (it != end);
+
     // finished with indexing root path now
     // place termination character on queue
     fileQueue->send("");
     
     // all errors were handled, so don't pass any outside this thread
     error = boost::exception_ptr();
-    if (myOptions.debug > 1)
-      std::cout << "Finished search of path: " << myOptions.root_search_path << std::endl;
+  }
+  catch (const boost::exception& e) {
+    std::cout << "searchWorker encountered unexpected exception" << diagnostic_information(e) << std::endl;
+    /* Passing exception out of thread */
+    error = boost::current_exception();
   }
   catch (...) {
     /* Passing exception out of thread */
     error = boost::current_exception();
   }
+
+  if (myOptions.debug > 1)
+    std::cout << "Finished search of path: " << myOptions.root_search_path << std::endl;
 }
 
 void cleanupWorkers (std::vector<boost::thread*> &&workers,  std::vector<boost::exception_ptr> &&index_errors)
